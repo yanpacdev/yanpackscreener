@@ -4,13 +4,20 @@ import pandas as pd
 import time
 
 st.set_page_config(page_title="Crypto Futures Screener", layout="wide")
-st.title("Version 2.0 – Positioning Intelligence")
+st.title("Version 3.0 – Flow Engine")
 
 BASE = "https://www.okx.com"
 
-# --------------------------
+# ----------------------
+# AUTO REFRESH
+# ----------------------
+refresh = st.sidebar.checkbox("Auto Refresh (60s)", value=True)
+if refresh:
+    st.experimental_rerun()
+
+# ----------------------
 # SAFE REQUEST
-# --------------------------
+# ----------------------
 def safe_request(url, params=None):
     try:
         r = requests.get(url, params=params, timeout=10)
@@ -19,198 +26,157 @@ def safe_request(url, params=None):
     except:
         return None
 
-# --------------------------
-# FETCH DATA
-# --------------------------
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=60)
 def get_tickers():
-    data = safe_request(
-        f"{BASE}/api/v5/market/tickers",
-        {"instType": "SWAP"}
-    )
+    data = safe_request(f"{BASE}/api/v5/market/tickers", {"instType": "SWAP"})
     if not data or "data" not in data:
         return pd.DataFrame()
     return pd.DataFrame(data["data"])
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=60)
 def get_open_interest():
-    data = safe_request(
-        f"{BASE}/api/v5/public/open-interest",
-        {"instType": "SWAP"}
-    )
+    data = safe_request(f"{BASE}/api/v5/public/open-interest", {"instType": "SWAP"})
     if not data or "data" not in data:
         return pd.DataFrame()
     return pd.DataFrame(data["data"])
 
-def get_funding(instId):
-    data = safe_request(
-        f"{BASE}/api/v5/public/funding-rate",
-        {"instId": instId}
-    )
-    if data and "data" in data and len(data["data"]) > 0:
-        try:
-            return float(data["data"][0]["fundingRate"])
-        except:
-            return 0
-    return 0
-
-# --------------------------
+# ----------------------
 # LOAD DATA
-# --------------------------
+# ----------------------
 df = get_tickers()
 oi = get_open_interest()
 
 if df.empty or oi.empty:
-    st.error("Failed to fetch data")
     st.stop()
 
-# --------------------------
-# NUMERIC CONVERSION
-# --------------------------
+# ----------------------
+# NUMERIC
+# ----------------------
 df["last"] = pd.to_numeric(df["last"], errors="coerce")
 df["open24h"] = pd.to_numeric(df["open24h"], errors="coerce")
 df["vol24h"] = pd.to_numeric(df["volCcy24h"], errors="coerce")
-
 df["change24h"] = ((df["last"] - df["open24h"]) / df["open24h"]) * 100
 
 oi["oi"] = pd.to_numeric(oi["oi"], errors="coerce")
 
-# --------------------------
-# OI CHANGE %
-# --------------------------
-if "oi_prev" not in st.session_state:
-    st.session_state.oi_prev = None
+# ----------------------
+# OI SNAPSHOT (5 MIN WINDOW)
+# ----------------------
+now = time.time()
 
-oi_current = oi[["instId", "oi"]].copy()
+if "oi_history" not in st.session_state:
+    st.session_state.oi_history = {}
 
-if st.session_state.oi_prev is not None:
-    oi_current = oi_current.merge(
-        st.session_state.oi_prev,
-        on="instId",
-        how="left",
-        suffixes=("", "_prev")
-    )
-    oi_current["oi_change_pct"] = (
-        (oi_current["oi"] - oi_current["oi_prev"]) /
-        oi_current["oi_prev"]
-    ) * 100
-else:
-    oi_current["oi_change_pct"] = 0
+oi_change_map = {}
 
-st.session_state.oi_prev = oi_current[["instId", "oi"]].copy()
+for _, row in oi.iterrows():
+    inst = row["instId"]
+    current_oi = row["oi"]
 
-# --------------------------
-# MERGE OI
-# --------------------------
-df = df.merge(
-    oi_current[["instId", "oi", "oi_change_pct"]],
-    on="instId",
-    how="left"
-)
+    if inst not in st.session_state.oi_history:
+        st.session_state.oi_history[inst] = {"time": now, "oi": current_oi}
+        oi_change_map[inst] = 0
+    else:
+        prev = st.session_state.oi_history[inst]
+        time_diff = now - prev["time"]
 
-# --------------------------
+        # 5 minute window
+        if time_diff >= 300:
+            if prev["oi"] > 0:
+                delta = ((current_oi - prev["oi"]) / prev["oi"]) * 100
+            else:
+                delta = 0
+
+            oi_change_map[inst] = delta
+            st.session_state.oi_history[inst] = {"time": now, "oi": current_oi}
+        else:
+            oi_change_map[inst] = 0
+
+df["oi"] = df["instId"].map(dict(zip(oi["instId"], oi["oi"])))
+df["oi_5m_delta"] = df["instId"].map(oi_change_map).fillna(0)
+
+# ----------------------
 # LIQUIDITY FILTER
-# --------------------------
+# ----------------------
 df = df[df["vol24h"] > 30000000]
 
-# --------------------------
-# FUNDING (only top 40 volume to avoid API overload)
-# --------------------------
-top_symbols = df.sort_values("vol24h", ascending=False).head(40)["instId"]
-funding_map = {}
+# ----------------------
+# STRUCTURE
+# ----------------------
+def structure(row):
+    if row["change24h"] > 0 and row["oi_5m_delta"] > 0:
+        return "Bull build"
+    if row["change24h"] < 0 and row["oi_5m_delta"] > 0:
+        return "Bear build"
+    if row["change24h"] > 0 and row["oi_5m_delta"] < 0:
+        return "Short cover"
+    if row["change24h"] < 0 and row["oi_5m_delta"] < 0:
+        return "Long close"
+    return "-"
 
-for inst in top_symbols:
-    funding_map[inst] = get_funding(inst)
+df["Structure"] = df.apply(structure, axis=1)
 
-df["funding"] = df["instId"].map(funding_map).fillna(0)
+# ----------------------
+# ALERT SYSTEM
+# ----------------------
+threshold = st.sidebar.slider("OI 5m Alert Threshold %", 1, 20, 5)
 
-# --------------------------
-# STRUCTURE CLASSIFICATION
-# --------------------------
-def classify(row):
-    if row["change24h"] > 0 and row["oi_change_pct"] > 0:
-        return "Bullish build-up"
-    if row["change24h"] < 0 and row["oi_change_pct"] > 0:
-        return "Bearish build-up"
-    if row["change24h"] > 0 and row["oi_change_pct"] < 0:
-        return "Short covering"
-    if row["change24h"] < 0 and row["oi_change_pct"] < 0:
-        return "Long closing"
-    return "Neutral"
+alerts = df[df["oi_5m_delta"].abs() > threshold]
 
-df["Structure"] = df.apply(classify, axis=1)
+if not alerts.empty:
+    st.warning("OI Expansion Alert")
+    st.dataframe(alerts[["instId", "oi_5m_delta"]], use_container_width=True)
 
-# --------------------------
-# SQUEEZE DETECTION
-# --------------------------
-def detect_squeeze(row):
-    if row["change24h"] > 2 and row["oi_change_pct"] > 5 and row["funding"] > 0.01:
-        return "Long squeeze risk"
-    if row["change24h"] < -2 and row["oi_change_pct"] > 5 and row["funding"] < -0.01:
-        return "Short squeeze risk"
-    return "None"
-
-df["Squeeze"] = df.apply(detect_squeeze, axis=1)
-
-# --------------------------
-# NARRATIVE CLUSTERING
-# --------------------------
+# ----------------------
+# NARRATIVE
+# ----------------------
 def narrative(instId):
     if instId.startswith(("SOL", "AVAX", "MATIC")):
         return "Layer1"
     if instId.startswith(("ARB", "OP")):
         return "Layer2"
-    if instId.startswith(("DOGE", "SHIB", "PEPE")):
+    if instId.startswith(("DOGE", "SHIB", "PEPE", "WIF")):
         return "Meme"
-    if instId.startswith(("LINK", "BAND")):
-        return "Oracle"
     return "Other"
 
 df["Narrative"] = df["instId"].apply(narrative)
 
 sector_flow = (
-    df.groupby("Narrative")["oi_change_pct"]
+    df.groupby("Narrative")["oi_5m_delta"]
     .mean()
     .sort_values(ascending=False)
 )
 
-# --------------------------
-# SCORE
-# --------------------------
-def score(row):
-    s = 0
-    if abs(row["change24h"]) > 3:
-        s += 2
-    if row["vol24h"] > 50000000:
-        s += 2
-    if row["oi_change_pct"] > 5:
-        s += 2
-    if row["Structure"] in ["Bullish build-up", "Bearish build-up"]:
-        s += 2
-    return s
-
-df["Score"] = df.apply(score, axis=1)
-
-df = df.sort_values("Score", ascending=False)
-
-# --------------------------
-# DISPLAY
-# --------------------------
-st.subheader("Top Positioning Expansion")
-st.dataframe(
-    df[[
-        "instId",
-        "change24h",
-        "oi_change_pct",
-        "funding",
-        "vol24h",
-        "Structure",
-        "Squeeze",
-        "Narrative",
-        "Score"
-    ]],
-    use_container_width=True
+# ----------------------
+# RANK BY REAL FLOW
+# ----------------------
+df["FlowScore"] = (
+    df["oi_5m_delta"].abs() * 0.6 +
+    df["change24h"].abs() * 0.2 +
+    (df["vol24h"] / 1e9) * 0.2
 )
 
-st.subheader("Sector OI Flow")
-st.dataframe(sector_flow)
+df = df.sort_values("FlowScore", ascending=False)
+
+# ----------------------
+# DISPLAY MINIMAL
+# ----------------------
+st.subheader("5m OI Expansion Ranking")
+
+display_cols = [
+    "instId",
+    "oi_5m_delta",
+    "change24h",
+    "Structure",
+    "Narrative",
+    "FlowScore"
+]
+
+st.dataframe(
+    df[display_cols].head(25),
+    use_container_width=True,
+    height=500
+)
+
+st.subheader("Sector OI Flow (5m)")
+st.dataframe(sector_flow, use_container_width=True)
