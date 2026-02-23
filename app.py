@@ -163,22 +163,40 @@ df = df.sort_values("FlowScore", ascending=False)
 # ----------------------
 # DISPLAY MINIMAL
 # ----------------------
-st.subheader("5m OI Expansion Ranking")
+top5_mode = st.sidebar.checkbox("Top 5 Only Mode")
 
-display_cols = [
-    "instId",
-    "oi_5m_delta",
-    "change24h",
-    "Structure",
-    "Narrative",
-    "FlowScore"
-]
+display_df = df.copy()
 
-st.dataframe(
-    df[display_cols].head(25),
-    use_container_width=True,
-    height=500
+if top5_mode:
+    display_df = display_df.head(5)
+else:
+    display_df = display_df.head(25)
+
+def oi_color(val):
+    if val > 0:
+        return "background-color: rgba(0,255,0,0.3)"
+    if val < 0:
+        return "background-color: rgba(255,0,0,0.3)"
+    return ""
+
+styled = (
+    display_df[[
+        "instId",
+        "oi_5m_delta",
+        "change24h",
+        "Structure",
+        "Narrative",
+        "FlowScore"
+    ]]
+    .style
+    .format({
+        "oi_5m_delta": "{:.2f}",
+        "change24h": "{:.2f}",
+        "FlowScore": "{:.2f}"
+    })
+    .applymap(oi_color, subset=["oi_5m_delta"])
 )
 
+st.dataframe(styled, use_container_width=True, height=400)
 st.subheader("Sector OI Flow (5m)")
 st.dataframe(sector_flow, use_container_width=True)
