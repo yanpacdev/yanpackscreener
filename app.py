@@ -3,81 +3,42 @@ import requests
 import pandas as pd
 
 st.set_page_config(page_title="Crypto Futures Screener", layout="wide")
-st.title("Ver 1.0.0")
+st.title("📊 OKX Futures Screener")
 
-BASE = "https://fapi.binance.com"
+BASE = "https://www.okx.com"
 
 def safe_request(url, params=None):
     try:
-        headers = {"User-Agent": "Mozilla/5.0"}
-        r = requests.get(url, params=params, headers=headers, timeout=10)
+        r = requests.get(url, params=params, timeout=10)
         r.raise_for_status()
         return r.json()
     except Exception as e:
         st.error(f"API Error: {e}")
         return None
 
-
 @st.cache_data(ttl=300)
-def get_symbols():
-    data = safe_request(f"{BASE}/fapi/v1/exchangeInfo")
-    if not data or "symbols" not in data:
-        return []
-    return [
-        s["symbol"]
-        for s in data["symbols"]
-        if s["contractType"] == "PERPETUAL"
-    ]
-
-
-@st.cache_data(ttl=300)
-def get_24h():
-    data = safe_request(f"{BASE}/fapi/v1/ticker/24hr")
+def get_tickers():
+    data = safe_request(f"{BASE}/api/v5/market/tickers", {"instType": "SWAP"})
     if not data:
         return pd.DataFrame()
-    return pd.DataFrame(data)
+    return pd.DataFrame(data["data"])
 
+df = get_tickers()
 
-@st.cache_data(ttl=300)
-def get_funding():
-    data = safe_request(f"{BASE}/fapi/v1/premiumIndex")
-    if not data:
-        return pd.DataFrame()
-    return pd.DataFrame(data)
-
-
-symbols = get_symbols()
-
-if not symbols:
+if df.empty:
     st.stop()
 
-ticker = get_24h()
-funding = get_funding()
+df["vol24h"] = pd.to_numeric(df["volCcy24h"], errors="coerce")
+df["change24h"] = pd.to_numeric(df["chgPct"], errors="coerce")
 
-if ticker.empty or funding.empty:
-    st.stop()
-
-df = ticker[ticker["symbol"].isin(symbols)].copy()
-
-df["priceChangePercent"] = pd.to_numeric(df["priceChangePercent"], errors="coerce")
-df["volume"] = pd.to_numeric(df["quoteVolume"], errors="coerce")
-
-funding = funding[["symbol", "lastFundingRate"]]
-funding["lastFundingRate"] = pd.to_numeric(funding["lastFundingRate"], errors="coerce")
-
-df = df.merge(funding, on="symbol", how="left")
-
-# Basic liquidity filter
-df = df[df["volume"] > 30000000]
+df = df[df["vol24h"] > 30000000]
 
 def score(row):
     s = 0
-    if abs(row["priceChangePercent"]) > 3:
+    if abs(row["change24h"]) > 0.03:
         s += 2
-    if row["volume"] > 50000000:
+    if row["vol24h"] > 50000000:
         s += 2
-    if 0 <= row["lastFundingRate"] <= 0.0003:
-        s += 1
     return s
 
 df["Score"] = df.apply(score, axis=1)
@@ -86,10 +47,9 @@ df = df.sort_values("Score", ascending=False)
 
 st.dataframe(
     df[[
-        "symbol",
-        "priceChangePercent",
-        "volume",
-        "lastFundingRate",
+        "instId",
+        "change24h",
+        "vol24h",
         "Score"
     ]],
     use_container_width=True
