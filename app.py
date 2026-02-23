@@ -2,9 +2,10 @@ import streamlit as st
 import requests
 import pandas as pd
 import time
+from streamlit_autorefresh import st_autorefresh
 
 st.set_page_config(page_title="Crypto Futures Screener", layout="wide")
-st.title("Version 3.0 – Flow Engine")
+st.title("Version 2.0.1 – Flow Engine")
 
 BASE = "https://www.okx.com"
 
@@ -12,8 +13,9 @@ BASE = "https://www.okx.com"
 # AUTO REFRESH
 # ----------------------
 refresh = st.sidebar.checkbox("Auto Refresh (60s)", value=True)
+
 if refresh:
-    st.experimental_rerun()
+    st_autorefresh(interval=60 * 1000, key="datarefresh")
 
 # ----------------------
 # SAFE REQUEST
