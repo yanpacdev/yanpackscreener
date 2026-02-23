@@ -8,13 +8,16 @@ st.title("📊 Crypto Futures Screener")
 
 API_URL = "https://api.coinanalyze.net/public/v1/markets"
 
+@st.cache_data(ttl=300)
 def get_data():
-    headers = {
-        "User-Agent": "Mozilla/5.0"
-    }
-    r = requests.get(API_URL, headers=headers, timeout=10)
-    r.raise_for_status()
-    return r.json()
+    try:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        r = requests.get(API_URL, headers=headers, timeout=10)
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        st.error("Failed to fetch data from API.")
+        return []
 
 def classify(price_chg, oi_chg):
     if price_chg > 0 and oi_chg > 0:
