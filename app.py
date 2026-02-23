@@ -3,66 +3,80 @@ import requests
 import pandas as pd
 
 st.set_page_config(page_title="Crypto Futures Screener", layout="wide")
-st.title("📊 Beta Version")
+st.title("Ver 1.0.0")
 
 BASE = "https://fapi.binance.com"
 
+def safe_request(url, params=None):
+    try:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        r = requests.get(url, params=params, headers=headers, timeout=10)
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        st.error(f"API Error: {e}")
+        return None
+
+
 @st.cache_data(ttl=300)
 def get_symbols():
-    r = requests.get(f"{BASE}/fapi/v1/exchangeInfo")
-    return [s["symbol"] for s in r.json()["symbols"] if s["contractType"] == "PERPETUAL"]
+    data = safe_request(f"{BASE}/fapi/v1/exchangeInfo")
+    if not data or "symbols" not in data:
+        return []
+    return [
+        s["symbol"]
+        for s in data["symbols"]
+        if s["contractType"] == "PERPETUAL"
+    ]
+
 
 @st.cache_data(ttl=300)
 def get_24h():
-    r = requests.get(f"{BASE}/fapi/v1/ticker/24hr")
-    return pd.DataFrame(r.json())
+    data = safe_request(f"{BASE}/fapi/v1/ticker/24hr")
+    if not data:
+        return pd.DataFrame()
+    return pd.DataFrame(data)
+
 
 @st.cache_data(ttl=300)
 def get_funding():
-    r = requests.get(f"{BASE}/fapi/v1/premiumIndex")
-    return pd.DataFrame(r.json())
+    data = safe_request(f"{BASE}/fapi/v1/premiumIndex")
+    if not data:
+        return pd.DataFrame()
+    return pd.DataFrame(data)
 
-@st.cache_data(ttl=300)
-def get_oi(symbol):
-    r = requests.get(f"{BASE}/fapi/v1/openInterest", params={"symbol": symbol})
-    return float(r.json()["openInterest"])
-
-def classify(price_chg, oi_chg):
-    if price_chg > 0 and oi_chg > 0:
-        return "Bullish Build-up"
-    elif price_chg < 0 and oi_chg > 0:
-        return "Bearish Build-up"
-    elif price_chg > 0 and oi_chg < 0:
-        return "Short Covering"
-    elif price_chg < 0 and oi_chg < 0:
-        return "Long Closing"
-    return "Neutral"
 
 symbols = get_symbols()
+
+if not symbols:
+    st.stop()
+
 ticker = get_24h()
 funding = get_funding()
 
+if ticker.empty or funding.empty:
+    st.stop()
+
 df = ticker[ticker["symbol"].isin(symbols)].copy()
 
-df["priceChangePercent"] = df["priceChangePercent"].astype(float)
-df["volume"] = df["quoteVolume"].astype(float)
+df["priceChangePercent"] = pd.to_numeric(df["priceChangePercent"], errors="coerce")
+df["volume"] = pd.to_numeric(df["quoteVolume"], errors="coerce")
 
 funding = funding[["symbol", "lastFundingRate"]]
-funding["lastFundingRate"] = funding["lastFundingRate"].astype(float)
+funding["lastFundingRate"] = pd.to_numeric(funding["lastFundingRate"], errors="coerce")
 
 df = df.merge(funding, on="symbol", how="left")
 
-# Basic Filters
+# Basic liquidity filter
 df = df[df["volume"] > 30000000]
 
-# Add Score
 def score(row):
     s = 0
     if abs(row["priceChangePercent"]) > 3:
         s += 2
     if row["volume"] > 50000000:
         s += 2
-    if 0 <= row["lastFundingRate"] <= 0.03:
+    if 0 <= row["lastFundingRate"] <= 0.0003:
         s += 1
     return s
 
