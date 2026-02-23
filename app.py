@@ -98,7 +98,7 @@ else:
     df["fundingRate"] = 0
 
 # =========================================================
-# OI DELTA ENGINE (5m / 15m / 1h STACK)
+# OI DELTA ENGINE (SAFE + MEMORY LIMITED)
 # =========================================================
 now = time.time()
 
@@ -113,18 +113,28 @@ for _, row in oi.iterrows():
     inst = row["instId"]
     current_oi = row["oi"]
 
+    # ---- HARD RESET if legacy format detected ----
+    if inst in st.session_state.oi_history:
+        if not isinstance(st.session_state.oi_history[inst], list):
+            st.session_state.oi_history[inst] = []
+
+    # ---- Initialize list ----
     if inst not in st.session_state.oi_history:
         st.session_state.oi_history[inst] = []
 
-    st.session_state.oi_history[inst].append((now, current_oi))
-
     history = st.session_state.oi_history[inst]
 
+    # ---- Append new snapshot ----
+    history.append((now, current_oi))
+
+    # ---- Keep only last 2 hours data (memory protection) ----
+    history[:] = [h for h in history if now - h[0] <= 7200]
+
     def calc_delta(seconds):
-        past = [h for h in history if now - h[0] >= seconds]
-        if not past:
+        past_points = [h for h in history if now - h[0] >= seconds]
+        if not past_points:
             return 0
-        prev_oi = past[-1][1]
+        prev_oi = past_points[-1][1]
         if prev_oi == 0:
             return 0
         return ((current_oi - prev_oi) / prev_oi) * 100
@@ -132,11 +142,6 @@ for _, row in oi.iterrows():
     oi_delta_5m[inst] = calc_delta(300)
     oi_delta_15m[inst] = calc_delta(900)
     oi_delta_1h[inst] = calc_delta(3600)
-
-df["oi"] = df["instId"].map(dict(zip(oi["instId"], oi["oi"])))
-df["oi_5m"] = df["instId"].map(oi_delta_5m).fillna(0)
-df["oi_15m"] = df["instId"].map(oi_delta_15m).fillna(0)
-df["oi_1h"] = df["instId"].map(oi_delta_1h).fillna(0)
 
 # =========================================================
 # CUMULATIVE DELTA SIMULATION
