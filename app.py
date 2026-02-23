@@ -9,7 +9,11 @@ st.title("📊 Crypto Futures Screener")
 API_URL = "https://api.coinanalyze.net/public/v1/markets"
 
 def get_data():
-    r = requests.get(API_URL)
+    headers = {
+        "User-Agent": "Mozilla/5.0"
+    }
+    r = requests.get(API_URL, headers=headers, timeout=10)
+    r.raise_for_status()
     return r.json()
 
 def classify(price_chg, oi_chg):
