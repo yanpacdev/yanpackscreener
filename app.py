@@ -129,7 +129,7 @@ if not alerts.empty:
     st.warning("OI Expansion Alert")
     st.dataframe(alerts[["instId", "oi_5m_delta"]], use_container_width=True)
 
-if telegram_enable and not alerts.empty:
+if telegram_enable and telegram_token and telegram_chat_id and not alerts.empty:
     message = "🚨 OI Expansion Alert\n"
     for _, r in alerts.iterrows():
         message += f"{r['instId']} | {r['oi_5m_delta']:.2f}%\n"
@@ -169,17 +169,7 @@ df = df.sort_values("FlowScore", ascending=False)
 # ----------------------
 # DISPLAY MINIMAL
 # ----------------------
-telegram_enable = st.sidebar.checkbox("Enable Telegram Alert")
-telegram_token = st.sidebar.text_input("Bot Token")
-telegram_chat_id = st.sidebar.text_input("Chat ID")
 top5_mode = st.sidebar.checkbox("Top 5 Only Mode")
-
-def send_telegram(msg):
-    url = f"https://api.telegram.org/bot{telegram_token}/sendMessage"
-    requests.post(url, data={
-        "chat_id": telegram_chat_id,
-        "text": msg
-    })
 
 display_df = df.copy()
 
@@ -216,3 +206,23 @@ styled = (
 st.dataframe(styled, use_container_width=True, height=400)
 st.subheader("Sector OI Flow (5m)")
 st.dataframe(sector_flow, use_container_width=True)
+
+# ----------------------
+# SIDEBAR CONFIG
+# ----------------------
+st.sidebar.header("Settings")
+
+top5_mode = st.sidebar.checkbox("Top 5 Only Mode")
+
+refresh = st.sidebar.checkbox("Auto Refresh (60s)", value=True)
+
+threshold = st.sidebar.slider("OI 5m Alert Threshold %", 1, 20, 5)
+
+telegram_enable = st.sidebar.checkbox("Enable Telegram Alert")
+
+telegram_token = ""
+telegram_chat_id = ""
+
+if telegram_enable:
+    telegram_token = st.sidebar.text_input("Bot Token")
+    telegram_chat_id = st.sidebar.text_input("Chat ID")
