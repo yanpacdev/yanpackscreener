@@ -129,6 +129,12 @@ if not alerts.empty:
     st.warning("OI Expansion Alert")
     st.dataframe(alerts[["instId", "oi_5m_delta"]], use_container_width=True)
 
+if telegram_enable and not alerts.empty:
+    message = "🚨 OI Expansion Alert\n"
+    for _, r in alerts.iterrows():
+        message += f"{r['instId']} | {r['oi_5m_delta']:.2f}%\n"
+    send_telegram(message)
+
 # ----------------------
 # NARRATIVE
 # ----------------------
@@ -163,7 +169,17 @@ df = df.sort_values("FlowScore", ascending=False)
 # ----------------------
 # DISPLAY MINIMAL
 # ----------------------
+telegram_enable = st.sidebar.checkbox("Enable Telegram Alert")
+telegram_token = st.sidebar.text_input("Bot Token")
+telegram_chat_id = st.sidebar.text_input("Chat ID")
 top5_mode = st.sidebar.checkbox("Top 5 Only Mode")
+
+def send_telegram(msg):
+    url = f"https://api.telegram.org/bot{telegram_token}/sendMessage"
+    requests.post(url, data={
+        "chat_id": telegram_chat_id,
+        "text": msg
+    })
 
 display_df = df.copy()
 
