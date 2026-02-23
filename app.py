@@ -2,22 +2,30 @@ import streamlit as st
 import requests
 import pandas as pd
 
-st.set_page_config(page_title="Crypto OI Screener", layout="wide")
+st.set_page_config(page_title="Crypto Futures Screener", layout="wide")
+st.title("📊 Beta Version")
 
-st.title("📊 Crypto Futures Screener")
-
-API_URL = "https://api.coinanalyze.net/public/v1/markets"
+BASE = "https://fapi.binance.com"
 
 @st.cache_data(ttl=300)
-def get_data():
-    try:
-        headers = {"User-Agent": "Mozilla/5.0"}
-        r = requests.get(API_URL, headers=headers, timeout=10)
-        r.raise_for_status()
-        return r.json()
-    except Exception as e:
-        st.error("Failed to fetch data from API.")
-        return []
+def get_symbols():
+    r = requests.get(f"{BASE}/fapi/v1/exchangeInfo")
+    return [s["symbol"] for s in r.json()["symbols"] if s["contractType"] == "PERPETUAL"]
+
+@st.cache_data(ttl=300)
+def get_24h():
+    r = requests.get(f"{BASE}/fapi/v1/ticker/24hr")
+    return pd.DataFrame(r.json())
+
+@st.cache_data(ttl=300)
+def get_funding():
+    r = requests.get(f"{BASE}/fapi/v1/premiumIndex")
+    return pd.DataFrame(r.json())
+
+@st.cache_data(ttl=300)
+def get_oi(symbol):
+    r = requests.get(f"{BASE}/fapi/v1/openInterest", params={"symbol": symbol})
+    return float(r.json()["openInterest"])
 
 def classify(price_chg, oi_chg):
     if price_chg > 0 and oi_chg > 0:
@@ -28,58 +36,46 @@ def classify(price_chg, oi_chg):
         return "Short Covering"
     elif price_chg < 0 and oi_chg < 0:
         return "Long Closing"
-    else:
-        return "Neutral"
+    return "Neutral"
 
-def score(row):
-    s = 0
+symbols = get_symbols()
+ticker = get_24h()
+funding = get_funding()
 
-    # OI Change
-    if row["oiChange24h"] > 10:
-        s += 3
+df = ticker[ticker["symbol"].isin(symbols)].copy()
 
-    # Volume filter
-    if row["volume24h"] > 30000000:
-        s += 2
+df["priceChangePercent"] = df["priceChangePercent"].astype(float)
+df["volume"] = df["quoteVolume"].astype(float)
 
-    # Funding
-    if 0 <= row["fundingRate"] <= 0.03:
-        s += 1
+funding = funding[["symbol", "lastFundingRate"]]
+funding["lastFundingRate"] = funding["lastFundingRate"].astype(float)
 
-    # OI/Volume ratio
-    if row["volume24h"] != 0:
-        ratio = row["openInterest"] / row["volume24h"]
-        if 0.2 <= ratio <= 0.8:
-            s += 2
+df = df.merge(funding, on="symbol", how="left")
 
-    return s
-
-data = get_data()
-df = pd.DataFrame(data)
-
-# Filter Futures Only
-df = df[df["contractType"] == "perpetual"]
-
-# Add Classification
-df["Structure"] = df.apply(lambda x: classify(x["priceChange24h"], x["oiChange24h"]), axis=1)
+# Basic Filters
+df = df[df["volume"] > 30000000]
 
 # Add Score
-df["Score"] = df.apply(score, axis=1)
+def score(row):
+    s = 0
+    if abs(row["priceChangePercent"]) > 3:
+        s += 2
+    if row["volume"] > 50000000:
+        s += 2
+    if 0 <= row["lastFundingRate"] <= 0.03:
+        s += 1
+    return s
 
-# Filter OI > 10%
-df = df[df["oiChange24h"] > 10]
+df["Score"] = df.apply(score, axis=1)
 
 df = df.sort_values("Score", ascending=False)
 
 st.dataframe(
     df[[
         "symbol",
-        "priceChange24h",
-        "oiChange24h",
-        "fundingRate",
-        "volume24h",
-        "openInterest",
-        "Structure",
+        "priceChangePercent",
+        "volume",
+        "lastFundingRate",
         "Score"
     ]],
     use_container_width=True
