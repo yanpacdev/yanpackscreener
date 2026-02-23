@@ -144,6 +144,20 @@ for _, row in oi.iterrows():
     oi_delta_1h[inst] = calc_delta(3600)
 
 # =========================================================
+# MAP OI DELTA TO DATAFRAME (FIX KEYERROR)
+# =========================================================
+df["oi"] = df["instId"].map(dict(zip(oi["instId"], oi["oi"])))
+
+df["oi_5m"] = df["instId"].map(oi_delta_5m).fillna(0)
+df["oi_15m"] = df["instId"].map(oi_delta_15m).fillna(0)
+df["oi_1h"] = df["instId"].map(oi_delta_1h).fillna(0)
+
+# Safety guard
+for col in ["oi_5m", "oi_15m", "oi_1h"]:
+    if col not in df.columns:
+        df[col] = 0
+
+# =========================================================
 # CUMULATIVE DELTA SIMULATION
 # =========================================================
 df["cumDeltaSim"] = df["oi_5m"] * df["change24h"]
@@ -152,23 +166,22 @@ df["cumDeltaSim"] = df["oi_5m"] * df["change24h"]
 # LIQUIDITY VACUUM DETECTOR
 # =========================================================
 df["vacuum"] = np.where(
-    (df["change24h"].abs() > 2) & (df["oi_5m"].abs() < 0.5),
+    (df["change24h"].abs() > 2) &
+    (df["oi_5m"].abs() < 0.5),
     "Vacuum",
     "-"
 )
-
 # =========================================================
-# TRAP PROBABILITY (LOGISTIC MODEL)
+# TRAP PROBABILITY
 # =========================================================
 def logistic(x):
     return 1 / (1 + np.exp(-x))
 
 df["trapScore"] = logistic(
-    (df["fundingRate"] * -500) +
+    (df["fundingRate"].fillna(0) * -500) +
     (df["oi_5m"] * 0.3) -
     (df["change24h"] * 0.2)
 )
-
 # =========================================================
 # FLOW SCORE
 # =========================================================
@@ -179,10 +192,6 @@ df["FlowScore"] = (
     df["change24h"].abs() * 0.2 +
     df["trapScore"] * 10 * 0.1
 )
-
-df = df[df["vol24h"] > 30000000]
-df = df.sort_values("FlowScore", ascending=False)
-
 # =========================================================
 # ALERT SYSTEM
 # =========================================================
@@ -209,6 +218,20 @@ st.dataframe(
     heatmap.style.background_gradient(cmap="RdYlGn"),
     use_container_width=True
 )
+# =========================================================
+# LIQUIDITY FILTER (FINAL STAGE)
+# =========================================================
+
+MIN_VOL = 30_000_000  # adjustable
+
+if "vol24h" in df.columns:
+    df = df[df["vol24h"] > MIN_VOL]
+else:
+    st.warning("vol24h column not found. Liquidity filter skipped.")
+
+# Final ranking
+if "FlowScore" in df.columns:
+    df = df.sort_values("FlowScore", ascending=False)
 
 # =========================================================
 # MAIN TABLE
